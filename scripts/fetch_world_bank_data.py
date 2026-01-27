@@ -53,7 +53,7 @@ def run_contextual_etl():
     print(f"🚀 Fetching THP-specific data...")
 
     # Fetch all data first
-    raw_data = wb.data.fetch(INDICATORS.keys(), economy=THP_AND_BENCHMARKS, time=range(2010, 2025))
+    raw_data = wb.data.fetch(INDICATORS.keys(), economy=THP_AND_BENCHMARKS, time=range(2005, 2025))
 
     rows = []
     for item in raw_data:
@@ -69,11 +69,13 @@ def run_contextual_etl():
     df = pd.DataFrame(rows)
     df = df.pivot(index=['country_code', 'year'], columns='indicator', values='value').reset_index()
 
-    # --- SAFETY CHECK: Ensure columns exist before math ---
-    # If the API didn't return data for these, we create them as empty columns
-    required_cols = ['child_stunting_pct', 'poverty_ratio']
-    for col in required_cols:
+    # --- SHABLONA FIX: Ensure ALL indicators exist as columns ---
+    # This maps your INDICATORS dictionary values to the dataframe columns
+    all_expected_columns = list(INDICATORS.values())
+
+    for col in all_expected_columns:
         if col not in df.columns:
+            print(f"⚠️ No data found for {col}. Creating null column.")
             df[col] = pd.NA
 
     # 2. PRO FEATURE: Synthetic Benchmark Generation
@@ -81,8 +83,12 @@ def run_contextual_etl():
 
     regional_codes = ['WLD', 'SSF', 'SAS', 'LCN', 'LIC', 'LMC']
 
-    # Calculate the average of ONLY the 13 countries to create a "Portfolio Average"
-    annual_averages = df[~df['country_code'].isin(regional_codes)].groupby('year')[required_cols].mean().reset_index()
+    # CRITICAL FIX: Only grab the columns we actually want to benchmark!
+    # This prevents the _x/_y suffix collision for other indicators.
+    benchmark_cols = ['child_stunting_pct', 'poverty_ratio']
+
+    annual_averages = df[~df['country_code'].isin(regional_codes)].groupby('year')[
+        benchmark_cols].mean().reset_index()
 
     # Rename columns to reflect they are benchmarks
     annual_averages = annual_averages.rename(columns={
