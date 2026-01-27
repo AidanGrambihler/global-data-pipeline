@@ -2,17 +2,6 @@ import wbgapi as wb
 import pandas as pd
 from google.cloud import bigquery
 
-# Search for indicators by keyword
-print("--- Gender & Women's Empowerment ---")
-print(wb.series.info(q='gender'))
-
-print("\n--- Nutrition & Hunger ---")
-print(wb.series.info(q='nutrition'))
-
-print("\n--- Rural Development & Agriculture ---")
-print(wb.series.info(q='agriculture'))
-
-
 # 1. Configuration - Double check these match your console!
 PROJECT_ID = "peppy-appliance-460822-e0"
 DATASET_ID = "global_analysis"
@@ -21,7 +10,7 @@ TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.thp_global_metrics"
 # Initialize the BigQuery Client
 client = bigquery.Client(project=PROJECT_ID)
 
-"""Global BaselineWLDThe ultimate average for the planet.
+"""Global Baseline WLD The ultimate average for the planet.
 Sub-Saharan Africa SSF Context for Benin, Ethiopia, Ghana, etc.
 South Asia SAS Context for Bangladesh and India.
 Latin America LCN Context for Mexico and Peru.
@@ -59,10 +48,11 @@ INDICATORS = {
     'SL.TLF.CACT.FE.ZS': 'female_labor_participation'  # Economic empowerment
 }
 
+
 def run_contextual_etl():
     print(f"🚀 Fetching THP-specific data...")
 
-    # Fetch data - filtering by country list and indicator list
+    # Fetch all data first
     raw_data = wb.data.fetch(INDICATORS.keys(), economy=THP_AND_BENCHMARKS, time=range(2010, 2025))
 
     rows = []
@@ -74,17 +64,51 @@ def run_contextual_etl():
             'value': item['value']
         })
 
-    # Pivot to clean format
+    # --- MOVED OUTSIDE THE LOOP ---
+    # 1. Pivot to initial clean format
     df = pd.DataFrame(rows)
     df = df.pivot(index=['country_code', 'year'], columns='indicator', values='value').reset_index()
 
-    print(f"📤 Uploading THP metrics to {TABLE_ID}...")
+    # --- SAFETY CHECK: Ensure columns exist before math ---
+    # If the API didn't return data for these, we create them as empty columns
+    required_cols = ['child_stunting_pct', 'poverty_ratio']
+    for col in required_cols:
+        if col not in df.columns:
+            df[col] = pd.NA
+
+    # 2. PRO FEATURE: Synthetic Benchmark Generation
+    print("📈 Calculating Synthetic World Averages from country data...")
+
+    regional_codes = ['WLD', 'SSF', 'SAS', 'LCN', 'LIC', 'LMC']
+
+    # Calculate the average of ONLY the 13 countries to create a "Portfolio Average"
+    annual_averages = df[~df['country_code'].isin(regional_codes)].groupby('year')[required_cols].mean().reset_index()
+
+    # Rename columns to reflect they are benchmarks
+    annual_averages = annual_averages.rename(columns={
+        'child_stunting_pct': 'world_stunting_avg',
+        'poverty_ratio': 'world_poverty_avg'
+    })
+
+    # 3. Handle the "Swiss Cheese" (Forward Fill)
+    annual_averages[['world_stunting_avg', 'world_poverty_avg']] = annual_averages[
+        ['world_stunting_avg', 'world_poverty_avg']].ffill()
+
+    # 4. Merge back to the main dataframe
+    df = df.merge(annual_averages, on='year', how='left')
+
+    # 5. Final Cleanup: Keep only the 13 THP Countries
+    thp_countries_only = ['BGD', 'BEN', 'BFA', 'ETH', 'GHA', 'IND', 'MWI', 'MEX', 'MOZ', 'PER', 'SEN', 'UGA', 'ZMB']
+    df_final = df[df['country_code'].isin(thp_countries_only)].copy()
+    df_final = df_final.round(2)
+
+    # --- UPLOAD SECTION ---
+    print(f"📤 Uploading {len(df_final)} benchmarked rows to {TABLE_ID}...")
     job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
 
     try:
-        job = client.load_table_from_dataframe(df, TABLE_ID, job_config=job_config)
-        job.result()
-        print(f"✅ Success! {len(df)} rows uploaded.")
+        client.load_table_from_dataframe(df_final, TABLE_ID, job_config=job_config).result()
+        print(f"✅ Success! World benchmarks are now embedded in the raw table.")
     except Exception as e:
         print(f"❌ Error: {e}")
 
