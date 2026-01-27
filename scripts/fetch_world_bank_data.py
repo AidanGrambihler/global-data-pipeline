@@ -5,42 +5,55 @@ from google.cloud import bigquery
 # 1. Configuration - Double check these match your console!
 PROJECT_ID = "peppy-appliance-460822-e0"
 DATASET_ID = "global_analysis"
-TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.world_bank_indicators"
+TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.thp_global_metrics"
 
 # Initialize the BigQuery Client
-# It will automatically look for the credentials you just saved in Step 1
 client = bigquery.Client(project=PROJECT_ID)
 
+# 2. THP Countries (ISO-3 Codes)
+THP_COUNTRIES = [
+    'BGD', 'BEN', 'BFA', 'ETH', 'GHA', 'IND', 'MWI',
+    'MEX', 'MOZ', 'PER', 'SEN', 'UGA', 'ZMB'
+]
 
-def run_etl():
-    print("🚀 Fetching data from World Bank API...")
+# 3. THP Relevant Indicators
+INDICATORS = {
+    'SH.STA.STNT.ZS': 'child_stunting_pct',
+    'SG.GEN.LSWP.ZS': 'women_parliament_pct',
+    'SL.AGR.EMPL.ZS': 'agri_employment_pct',
+    'SH.STA.BRTW.ZS': 'low_birthweight_pct',
+    'SI.POV.DDAY': 'poverty_ratio'
+}
 
-    # Indicators: GDP per capita and Poverty headcount ratio
-    indicators = {
-        'NY.GDP.PCAP.CD': 'gdp_per_capita',
-        'SI.POV.DDAY': 'poverty_ratio'
-    }
+def run_thp_etl():
+    print(f"🚀 Fetching THP-specific data for {len(THP_COUNTRIES)} countries...")
 
-    # Pull data for the last 15 years
-    df = wb.data.DataFrame(indicators.keys(), time=range(2010, 2025), labels=True)
+    # Fetch data - filtering by country list and indicator list
+    raw_data = wb.data.fetch(INDICATORS.keys(), economy=THP_COUNTRIES, time=range(2010, 2025))
 
-    # 2. Transformation (The "Shablona" Clean)
-    print("🧹 Cleaning data for BigQuery...")
-    df = df.reset_index()
-    # BigQuery column names cannot have dots or spaces
-    df.columns = [c.lower().replace('.', '_').replace(' ', '_') for c in df.columns]
+    rows = []
+    for item in raw_data:
+        rows.append({
+            'country_code': item['economy'],
+            'year': int(item['time'][2:]),
+            'indicator': INDICATORS.get(item['series']),
+            'value': item['value']
+        })
 
-    # 3. Load to BigQuery
-    print(f"📤 Uploading to {TABLE_ID}...")
+    # Pivot to clean format
+    df = pd.DataFrame(rows)
+    df = df.pivot(index=['country_code', 'year'], columns='indicator', values='value').reset_index()
+
+    print(f"📤 Uploading THP metrics to {TABLE_ID}...")
     job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
 
     try:
         job = client.load_table_from_dataframe(df, TABLE_ID, job_config=job_config)
-        job.result()  # Wait for the upload to finish
-        print("✅ Success! Data is now live in BigQuery.")
+        job.result()
+        print(f"✅ Success! {len(df)} rows uploaded.")
     except Exception as e:
         print(f"❌ Error: {e}")
 
 
 if __name__ == "__main__":
-    run_etl()
+    run_thp_etl()
