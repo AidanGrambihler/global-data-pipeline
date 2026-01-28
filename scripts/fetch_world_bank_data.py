@@ -53,7 +53,7 @@ def run_contextual_etl():
     print(f"🚀 Fetching THP-specific data...")
 
     # Fetch all data first
-    raw_data = wb.data.fetch(INDICATORS.keys(), economy=THP_AND_BENCHMARKS, time=range(2005, 2025))
+    raw_data = wb.data.fetch(INDICATORS.keys(), economy=THP_AND_BENCHMARKS, time=range(2010, 2025))
 
     rows = []
     for item in raw_data:
