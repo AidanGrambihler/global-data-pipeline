@@ -2,58 +2,44 @@ import wbgapi as wb
 import pandas as pd
 from google.cloud import bigquery
 
-# 1. Configuration - Double check these match your console!
+# 1. Configuration
 PROJECT_ID = "peppy-appliance-460822-e0"
 DATASET_ID = "global_analysis"
 TABLE_ID = f"{PROJECT_ID}.{DATASET_ID}.thp_global_metrics"
 
-# Initialize the BigQuery Client
 client = bigquery.Client(project=PROJECT_ID)
 
-"""Global Baseline WLD The ultimate average for the planet.
-Sub-Saharan Africa SSF Context for Benin, Ethiopia, Ghana, etc.
-South Asia SAS Context for Bangladesh and India.
-Latin America LCN Context for Mexico and Peru.
-Low Income LIC Benchmarking against the most vulnerable peers.
-Lower Middle Inc. LMC Benchmarking against countries in transition."""
+# 2. Global Constants
+THP_COUNTRIES = ['BGD', 'BEN', 'BFA', 'ETH', 'GHA', 'IND', 'MWI', 'MEX', 'MOZ', 'PER', 'SEN', 'UGA', 'ZMB']
+BENCHMARKS = ['WLD', 'SSF', 'SAS', 'LCN', 'LIC', 'LMC']
+ALL_CODES = THP_COUNTRIES + BENCHMARKS
 
-# 2. THP Countries and Benchmarks (ISO-3 Codes)
-THP_AND_BENCHMARKS = [
-    # THP Countries
-    'BGD', 'BEN', 'BFA', 'ETH', 'GHA', 'IND', 'MWI', 
-    'MEX', 'MOZ', 'PER', 'SEN', 'UGA', 'ZMB',
-    # Benchmarks (Aggregates)
-    'WLD', 'SSF', 'SAS', 'LCN', 'LIC', 'LMC' 
-]
-
-# 3. THP Relevant Indicators
 INDICATORS = {
-    # Existing
     'SH.STA.STNT.ZS': 'child_stunting_pct',
     'SG.GEN.LSWP.ZS': 'women_parliament_pct',
     'SL.AGR.EMPL.ZS': 'agri_employment_pct',
     'SH.STA.BRTW.ZS': 'low_birthweight_pct',
     'SI.POV.DDAY': 'poverty_ratio',
-
-    # NEW: Food & Resilience
-    'SN.ITK.DEFC.ZS': 'undernourishment_prev_pct',  # Basic hunger metric
-    'AG.LND.AGRI.ZS': 'agricultural_land_pct',  # Resource base
-
-    # NEW: Health & Water (THP focus on sanitation)
+    'SN.ITK.DEFC.ZS': 'undernourishment_prev_pct',
+    'AG.LND.AGRI.ZS': 'agricultural_land_pct',
     'SH.H2O.BASW.ZS': 'basic_water_access_pct',
     'SH.STA.BASS.ZS': 'basic_sanitation_access_pct',
+    'SE.PRM.CMPT.ZS': 'primary_completion_rate',
+    'SL.TLF.CACT.FE.ZS': 'female_labor_participation',
 
-    # NEW: Human Capital (Self-reliance)
-    'SE.PRM.CMPT.ZS': 'primary_completion_rate',  # Education baseline
-    'SL.TLF.CACT.FE.ZS': 'female_labor_participation'  # Economic empowerment
+# POPULATION & GROWTH
+    'SP.POP.TOTL': 'total_population',
+    'SP.POP.GROW': 'population_growth_annual_pct',
+    'SP.RUR.TOTL.ZS': 'rural_population_pct',
+    'SP.DYN.TFRT.IN': 'fertility_rate_total'
 }
 
 
 def run_contextual_etl():
-    print(f"🚀 Fetching THP-specific data...")
+    print(f"🚀 Fetching data...")
 
-    # Fetch all data first
-    raw_data = wb.data.fetch(INDICATORS.keys(), economy=THP_AND_BENCHMARKS, time=range(2010, 2025))
+    # 1. Fetch data
+    raw_data = wb.data.fetch(INDICATORS.keys(), economy=ALL_CODES, time=range(2010, 2025))
 
     rows = []
     for item in raw_data:
@@ -64,57 +50,50 @@ def run_contextual_etl():
             'value': item['value']
         })
 
-    # --- MOVED OUTSIDE THE LOOP ---
-    # 1. Pivot to initial clean format
     df = pd.DataFrame(rows)
+    df['year'] = df['year'].astype(int)
     df = df.pivot(index=['country_code', 'year'], columns='indicator', values='value').reset_index()
 
-    # --- SHABLONA FIX: Ensure ALL indicators exist as columns ---
-    # This maps your INDICATORS dictionary values to the dataframe columns
-    all_expected_columns = list(INDICATORS.values())
+    # 2. Extract Poverty Benchmarks (Removing Stunting Benchmarks)
+    print("📈 Processing Poverty Benchmarks...")
+    benchmarks_df = df[df['country_code'].isin(BENCHMARKS)].copy()
 
-    for col in all_expected_columns:
-        if col not in df.columns:
-            print(f"⚠️ No data found for {col}. Creating null column.")
-            df[col] = pd.NA
+    # We only pivot poverty_ratio now
+    bench_pivot = benchmarks_df.pivot(index='year', columns='country_code',
+                                      values=['poverty_ratio'])
 
-    # 2. PRO FEATURE: Synthetic Benchmark Generation
-    print("📈 Calculating Synthetic World Averages from country data...")
+    # Flatten names (e.g., poverty_ratio_WLD)
+    bench_pivot.columns = [f"{col[0]}_{col[1]}" for col in bench_pivot.columns]
+    bench_pivot = bench_pivot.reset_index()
 
-    regional_codes = ['WLD', 'SSF', 'SAS', 'LCN', 'LIC', 'LMC']
+    # 3. Rename Map (Only Poverty)
+    rename_map = {
+        'poverty_ratio_WLD': 'world_poverty_avg',
+        'poverty_ratio_SSF': 'ssf_poverty_avg',
+        'poverty_ratio_SAS': 'sas_poverty_avg',
+        'poverty_ratio_LCN': 'lcn_poverty_avg',
+        'poverty_ratio_LIC': 'poverty_ratio_LIC',
+        'poverty_ratio_LMC': 'poverty_ratio_LMC'
+    }
+    bench_pivot = bench_pivot.rename(columns=rename_map)
 
-    # CRITICAL FIX: Only grab the columns we actually want to benchmark!
-    # This prevents the _x/_y suffix collision for other indicators.
-    benchmark_cols = ['child_stunting_pct', 'poverty_ratio']
+    # 4. Fill gaps in poverty data
+    bench_pivot = bench_pivot.sort_values('year').ffill().bfill()
 
-    annual_averages = df[~df['country_code'].isin(regional_codes)].groupby('year')[
-        benchmark_cols].mean().reset_index()
+    # 5. Merge back to THP Countries
+    df_final = df[df['country_code'].isin(THP_COUNTRIES)].copy()
+    df_final = df_final.merge(bench_pivot, on='year', how='left')
+    df_final = df_final.round(4)
 
-    # Rename columns to reflect they are benchmarks
-    annual_averages = annual_averages.rename(columns={
-        'child_stunting_pct': 'world_stunting_avg',
-        'poverty_ratio': 'world_poverty_avg'
-    })
+    # 6. BigQuery Upload
+    print(f"📤 Resetting table and uploading {len(df_final)} rows...")
+    client.delete_table(TABLE_ID, not_found_ok=True)
 
-    # 3. Handle the "Swiss Cheese" (Forward Fill)
-    annual_averages[['world_stunting_avg', 'world_poverty_avg']] = annual_averages[
-        ['world_stunting_avg', 'world_poverty_avg']].ffill()
-
-    # 4. Merge back to the main dataframe
-    df = df.merge(annual_averages, on='year', how='left')
-
-    # 5. Final Cleanup: Keep only the 13 THP Countries
-    thp_countries_only = ['BGD', 'BEN', 'BFA', 'ETH', 'GHA', 'IND', 'MWI', 'MEX', 'MOZ', 'PER', 'SEN', 'UGA', 'ZMB']
-    df_final = df[df['country_code'].isin(thp_countries_only)].copy()
-    df_final = df_final.round(2)
-
-    # --- UPLOAD SECTION ---
-    print(f"📤 Uploading {len(df_final)} benchmarked rows to {TABLE_ID}...")
-    job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE")
+    job_config = bigquery.LoadJobConfig(write_disposition="WRITE_TRUNCATE", autodetect=True)
 
     try:
         client.load_table_from_dataframe(df_final, TABLE_ID, job_config=job_config).result()
-        print(f"✅ Success! World benchmarks are now embedded in the raw table.")
+        print(f"✅ Success! Table is clean and poverty benchmarks are populated.")
     except Exception as e:
         print(f"❌ Error: {e}")
 
