@@ -1,7 +1,7 @@
 # Global Development Indicator Pipeline
 
-[![Status](https://img.shields.io/badge/Status-WIP-orange.svg)](https://github.com/your-username/global-data-pipeline)
-[![Tech](https://img.shields.io/badge/Stack-Python%20%7C%20BigQuery%20%7C%20SQL-blue.svg)](https://github.com/your-username/global-data-pipeline)
+[![Status](https://img.shields.io/badge/Status-WIP-orange.svg)]
+[![Tech](https://img.shields.io/badge/Stack-Python%20%7C%20BigQuery%20%7C%20SQL-blue.svg)]
 
 ## 📌 Project Overview
 Architecting an automated ETL pipeline to ingest, transform, and fuse global development data from **World Bank**, **WFP**, and **FAOSTAT**. This project centralizes fragmented indicators into a unified Google BigQuery warehouse to drive real-time trend analysis (2010–Present) for The Hunger Project’s (THP) focus countries.
